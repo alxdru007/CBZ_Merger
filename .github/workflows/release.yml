@@ -1,0 +1,70 @@
+name: Build and Release CBZ Merger
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger build automatisch via Git Tag e.g. "git tag v1.0.0" and "git push --tags"
+  workflow_dispatch: # Erlaubt uns den Build jederzeit manuell über den "Actions" Reiter in GitHub zu starten
+
+permissions:
+  contents: write # Nötig, damit die Action die fertigen Dateien unter "Releases" anhängen darf
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Install OS Dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y python3-tk tk-dev
+        
+    - name: Install Python Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+        
+    - name: Build with PyInstaller
+      # --collect-data tkinterdnd2 ist hier das absolute Geheimnis, damit Drag&Drop nicht crasht!
+      run: |
+        pyinstaller --noconfirm --windowed --onefile --name "CBZ_Merger" --collect-data tkinterdnd2 cbz_merger_gui.py
+
+    # MacOS bündelt Apps in Ordnerstrukturen, wir zippen sie für Downloads
+    - name: Zip Mac App
+      if: runner.os == 'macOS'
+      run: |
+        cd dist
+        zip -r CBZ_Merger_macOS.zip CBZ_Merger.app
+        
+    - name: Rename Windows EXE
+      if: runner.os == 'Windows'
+      run: |
+        ren dist\CBZ_Merger.exe CBZ_Merger_Windows.exe
+        
+    - name: Rename Linux Binary
+      if: runner.os == 'Linux'
+      run: |
+        mv dist/CBZ_Merger dist/CBZ_Merger_Linux
+        
+    - name: Upload to final GitHub Release
+      uses: softprops/action-gh-release@v2
+      if: startsWith(github.ref, 'refs/tags/') # Führt diesen Schritt nur aus, wenn ein Release-Tag (v1.0.0) gepusht wurde
+      with:
+        files: |
+          dist/CBZ_Merger_Windows.exe
+          dist/CBZ_Merger_macOS.zip
+          dist/CBZ_Merger_Linux

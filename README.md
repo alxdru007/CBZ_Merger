@@ -30,7 +30,14 @@
 
 ## 🚀 Installation
 
-Ensure you have **Python 3.8+** installed on your system. 
+### Option A: Standalone Executables (Recommended for non-developers)
+You don't need to install Python! Simply navigate to the **[Releases](https://github.com/alxdru007/CBZ_Merger/releases)** page and download the pre-compiled standalone application for your system:
+- 🪟 `CBZ_Merger_Windows.exe`
+- 🍎 `CBZ_Merger_macOS.zip` (Extract to get the `.app`)
+- 🐧 `CBZ_Merger_Linux` (Mark as executable before running)
+
+### Option B: Run from Source (For developers)
+Ensure you have **Python 3.8+** installed. 
 
 1. **Clone the repository:**
 ```bash
