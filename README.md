@@ -11,17 +11,20 @@
 
 <br />
 
+<p align="center">
+  <img src="screenshot.png" alt="CBZ Merger Graphical Interface Preview" width="800">
+</p>
+
 ## ✨ Features
 
-- ⚡ **Multi-Threaded Performance**: Extracts and packages large comic/manga archives asynchronously. Uses all available CPU cores to reduce processing time drastically!
-- 🎨 **Premium Dark Mode GUI**: Fully responsive custom-drawn `tkinter` canvas UI with smooth gradients and hover animations. Adapts perfectly to both small window sizes and fullscreen modes.
-- 📱 **E-Reader Optimization Engine**: Built specifically for Kobo, Kindle, and other e-ink displays. Shrinks file size by up to 50–70% via:
-  - Lossless Grayscale (B/W) conversion
-  - Smart resolution downscaling (Max width: 1600px)
-  - Highly efficient JPEG compression 
-- 🏷️ **Intelligent Metadata Generation**: Automatically calculates page lengths and injects a standard `ComicInfo.xml` file into the merged `.cbz` archive so e-readers (like Mihon, Perfect Viewer, CDisplayEX) parse chapters and titles flawlessly.
-- 📁 **Natural Alphabetical Sorting**: Recognizes numbers inside filenames the way humans do (`Chapter_2.cbz` comes before `Chapter_10.cbz`).
-- 💻 **CLI Capability**: Headless use supported! Perfect for batch automation via scripts.
+- ⚡ **Multi-Threaded Performance**: Extracts and packages large comic/manga archives asynchronously. Uses all available CPU cores!
+- 🎨 **Premium Dark Mode GUI**: Fully responsive custom-drawn `tkinter` canvas UI with smooth gradients and hover animations.
+- 📱 **E-Reader Optimization Engine**: Specifically built for Kobo, Kindle, and e-ink displays. Shrinks file size by up to 50–70% via Grayscale conversion, downscaling, and JPEG compression.
+- 🏷️ **Smart Cover & Metadata**: Auto-detects the first cover and displays a live thumbnail. You can drag and drop custom `.jpg` files as covers! Also auto-injects standard `ComicInfo.xml` metadata for your reading apps.
+- 📦 **Volume Splitter**: Divides massive 5GB series into handy 15-chapter chunks (`Name_Vol_1.cbz`) automatically without blowing up RAM.
+- 🎛️ **Advanced File Management**: Full control to manually re-sort chapters (⬆️/⬇️) or deselect individual files directly in the GUI. Features Drag & Drop support!
+- 🌍 **Localization**: Real-time language switching capabilities (DE/EN) built right into the UI.
+- 💻 **CLI Capability**: Headless use supported for automation via scripts.
 
 ---
 
@@ -35,11 +38,11 @@ git clone https://github.com/alxdru007/CBZ_Merger.git
 cd CBZ_Merger
 ```
 
-2. **Install the required library for Image Processing (Pillow):**
+2. **Install the required dependencies:**
 ```bash
 pip install -r requirements.txt
-# OR simply run:
-pip install Pillow
+# OR install manually:
+pip install Pillow tkinterdnd2
 ```
 
 ---
@@ -79,8 +82,8 @@ python cbz_merger.py --ereader ./ChapterFolder/ ./FinalBook.cbz
 
 ## 🛠️ Architecture
 
-* `cbz_merger.py` - Core logic. Uses `concurrent.futures.ThreadPoolExecutor` to execute unzipping protocols concurrently while side-stepping GIL limitations during file I/O operations. Uses `xml.etree.ElementTree` to write metadata XML trees.
-* `cbz_merger_gui.py` - Custom-built Tkinter implementation featuring pure Canvas-based interactive elements (`GradientButton`, `GlowProgressBar`). Features zero external GUI constraints.
+* `cbz_merger.py` - Core logic. Uses `concurrent.futures.ThreadPoolExecutor` to execute unzipping protocols concurrently and `xml.etree.ElementTree` to write dynamically chunked metadata XML trees.
+* `cbz_merger_gui.py` - Custom-built `tkinter` / `tkinterdnd2` implementation featuring pure Canvas-based interactive elements (`GradientButton`, scrollable frames, image loading). Handles complex threading interrupts for safe user cancellations.
 
 ---
 
