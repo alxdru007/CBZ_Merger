@@ -31,7 +31,7 @@ Ensure you have **Python 3.8+** installed on your system.
 
 1. **Clone the repository:**
 ```bash
-git clone https://github.com/YourUsername/CBZ_Merger.git
+git clone https://github.com/alxdru007/CBZ_Merger.git
 cd CBZ_Merger
 ```
 
