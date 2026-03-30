@@ -12,7 +12,7 @@
 <br />
 
 <p align="center">
-  <img src=assets/screenshot.png" alt="CBZ Merger Graphical Interface Preview" width="800">
+  <img src="assets/screenshot.png" alt="CBZ Merger Graphical Interface Preview" width="800">
 </p>
 
 ## ✨ Features
