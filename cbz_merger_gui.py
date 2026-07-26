@@ -9,8 +9,11 @@ Requires: tkinter (included with Python on Windows)
 Optional: tkinterdnd2 (for drag and drop support)
 """
 
+from __future__ import annotations
+
 import os
 import sys
+import subprocess
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -27,7 +30,53 @@ except ImportError:
     HAS_DND = False
 
 # Import the core merger logic
-from cbz_merger import merge_cbz_files, discover_cbz_files, _format_size, _natural_sort_key
+from cbz_merger import merge_cbz_files, discover_cbz_files, _format_size, _natural_sort_key, SUPPORTED_IMAGE_EXTENSIONS
+
+
+# ─── Cross-Platform Fonts ────────────────────────────────────────────────────
+# "Segoe UI" / "Cascadia Code" / "Segoe UI Emoji" only exist on Windows. On
+# other platforms tkinter would silently substitute an arbitrary default font,
+# so we pick the best available family per-platform at runtime instead.
+_FONT_FAMILY_CACHE: dict = {}
+
+
+def _pick_font_family(*candidates: str) -> str:
+    if "available" not in _FONT_FAMILY_CACHE:
+        try:
+            import tkinter.font as tkfont
+            _FONT_FAMILY_CACHE["available"] = set(tkfont.families())
+        except Exception:
+            _FONT_FAMILY_CACHE["available"] = set()
+    available = _FONT_FAMILY_CACHE["available"]
+    for name in candidates:
+        if name in available:
+            return name
+    return candidates[-1]  # last candidate is a generic Tk fallback
+
+
+def ui_font(size, weight=None):
+    if "ui" not in _FONT_FAMILY_CACHE:
+        _FONT_FAMILY_CACHE["ui"] = _pick_font_family(
+            "Segoe UI", "SF Pro Text", "Helvetica Neue", "Ubuntu", "DejaVu Sans", "TkDefaultFont"
+        )
+    family = _FONT_FAMILY_CACHE["ui"]
+    return (family, size, weight) if weight else (family, size)
+
+
+def mono_font(size):
+    if "mono" not in _FONT_FAMILY_CACHE:
+        _FONT_FAMILY_CACHE["mono"] = _pick_font_family(
+            "Cascadia Code", "Consolas", "SF Mono", "Menlo", "DejaVu Sans Mono", "TkFixedFont"
+        )
+    return (_FONT_FAMILY_CACHE["mono"], size)
+
+
+def emoji_font(size):
+    if "emoji" not in _FONT_FAMILY_CACHE:
+        _FONT_FAMILY_CACHE["emoji"] = _pick_font_family(
+            "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", "TkDefaultFont"
+        )
+    return (_FONT_FAMILY_CACHE["emoji"], size)
 
 # ─── Translations ────────────────────────────────────────────────────────────
 TRANSLATIONS = {
@@ -77,6 +126,10 @@ TRANSLATIONS = {
         "auto_cover": "Auto (File 1)",
         "custom_cover": "Custom Cover",
         "no_cover": "No Cover",
+        "confirm_overwrite_title": "Overwrite existing file(s)?",
+        "confirm_overwrite": "{} file(s) already exist and will be overwritten:",
+        "select_all": "Select All",
+        "select_none": "Select None",
     },
     "de": {
         "title_main": "CBZ Merger",
@@ -124,6 +177,10 @@ TRANSLATIONS = {
         "auto_cover": "Auto (Datei 1)",
         "custom_cover": "Eigenes Cover",
         "no_cover": "Kein Cover",
+        "confirm_overwrite_title": "Vorhandene Datei(en) überschreiben?",
+        "confirm_overwrite": "{} Datei(en) existieren bereits und werden überschrieben:",
+        "select_all": "Alle auswählen",
+        "select_none": "Keine auswählen",
     }
 }
 
@@ -238,9 +295,9 @@ class GradientButton(tk.Canvas):
 
         self.create_line(r, 1, w - r, 1, fill=colors[2], width=1)
         self.create_text(w // 2 + 1, h // 2 + 1, text=self._text,
-                         fill="#1a1a2a", font=("Segoe UI", self._font_size, "bold"))
+                         fill="#1a1a2a", font=ui_font(self._font_size, "bold"))
         self.create_text(w // 2, h // 2, text=self._text,
-                         fill=self._fg, font=("Segoe UI", self._font_size, "bold"))
+                         fill=self._fg, font=ui_font(self._font_size, "bold"))
 
     def _on_hover(self, entering):
         self._hovering = entering
@@ -258,12 +315,14 @@ class GradientButton(tk.Canvas):
             disabled_colors = (Colors.BG_CARD, Colors.BG_CARD, Colors.BG_CARD)
             self._fg = Colors.TEXT_DIM
             self._draw(disabled_colors)
+            self.configure(cursor="")
         else:
             if self._style in ["primary", "danger"]:
                 self._fg = "#ffffff"
             else:
                 self._fg = Colors.TEXT_SEC
             self._draw(self._colors)
+            self.configure(cursor="hand2" if self._hovering else "")
 
     def set_text(self, text):
         self._text = text
@@ -318,7 +377,7 @@ class StyledEntry(tk.Frame):
         self.inner.pack(fill="both", expand=True)
         self.entry = tk.Entry(
             self.inner, textvariable=textvariable,
-            font=("Segoe UI", 10), bg=Colors.BG_INPUT, fg=Colors.TEXT,
+            font=ui_font(10), bg=Colors.BG_INPUT, fg=Colors.TEXT,
             insertbackground=Colors.ACCENT_LIGHT,
             highlightthickness=0, borderwidth=0, relief="flat"
         )
@@ -414,7 +473,10 @@ class CBZMergerApp:
     def _set_dark_titlebar(self):
         try:
             import ctypes
-            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            self.root.update_idletasks()
+            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+            if not hwnd:
+                hwnd = self.root.winfo_id()
             DWMWA_USE_IMMERSIVE_DARK_MODE = 20
             ctypes.windll.dwmapi.DwmSetWindowAttribute(
                 hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
@@ -435,14 +497,14 @@ class CBZMergerApp:
         icon_canvas.pack(side="left")
         icon_canvas.create_oval(0, 0, 42, 42, fill=Colors.ACCENT_DARK, outline="")
         icon_canvas.create_oval(2, 2, 40, 40, fill=Colors.ACCENT_DIM, outline="")
-        icon_canvas.create_text(21, 21, text="📚", font=("Segoe UI Emoji", 16))
+        icon_canvas.create_text(21, 21, text="📚", font=emoji_font(16))
 
         title_frame = tk.Frame(header, bg=Colors.BG_SURFACE)
         title_frame.pack(side="left", padx=(14, 0))
 
-        self.lbl_title_main = tk.Label(title_frame, font=("Segoe UI", 17, "bold"), bg=Colors.BG_SURFACE, fg=Colors.TEXT)
+        self.lbl_title_main = tk.Label(title_frame, font=ui_font(17, "bold"), bg=Colors.BG_SURFACE, fg=Colors.TEXT)
         self.lbl_title_main.pack(anchor="w")
-        self.lbl_title_desc = tk.Label(title_frame, font=("Segoe UI", 9), bg=Colors.BG_SURFACE, fg=Colors.TEXT_DIM)
+        self.lbl_title_desc = tk.Label(title_frame, font=ui_font(9), bg=Colors.BG_SURFACE, fg=Colors.TEXT_DIM)
         self.lbl_title_desc.pack(anchor="w")
 
         self.lang_btn = GradientButton(header, text=self.t("lang_btn"), command=self._toggle_language,
@@ -477,7 +539,7 @@ class CBZMergerApp:
         self.status_dot.create_oval(0, 0, 8, 8, fill=Colors.TEXT_DIM, outline="")
         self._status_dot_color = Colors.TEXT_DIM
 
-        self.status_label = tk.Label(status_row, font=("Segoe UI", 9), bg=Colors.BG_BASE, fg=Colors.TEXT_DIM, anchor="w")
+        self.status_label = tk.Label(status_row, font=ui_font(9), bg=Colors.BG_BASE, fg=Colors.TEXT_DIM, anchor="w")
         self.status_label.pack(side="left", fill="x")
 
         self.progress_bar = GlowProgressBar(bottom, height=4)
@@ -518,7 +580,7 @@ class CBZMergerApp:
         path_frame = tk.Frame(path_row, bg=Colors.BG_INPUT)
         path_frame.pack(fill="x")
 
-        self.folder_label = tk.Label(path_frame, textvariable=self.folder_var, font=("Segoe UI", 9),
+        self.folder_label = tk.Label(path_frame, textvariable=self.folder_var, font=ui_font(9),
                                      bg=Colors.BG_INPUT, fg=Colors.TEXT_DIM, anchor="w", padx=10, pady=6)
         self.folder_label.pack(fill="x")
 
@@ -534,8 +596,20 @@ class CBZMergerApp:
 
         self.lbl_sec_files = self._make_section_label(files_header, "📋", "", pack_side="left")
 
-        self.file_count_label = tk.Label(files_header, text="0", font=("Segoe UI", 9), bg=Colors.BG_BASE, fg=Colors.TEXT_DIM)
+        self.file_count_label = tk.Label(files_header, text="0", font=ui_font(9), bg=Colors.BG_BASE, fg=Colors.TEXT_DIM)
         self.file_count_label.pack(side="right")
+
+        self.select_none_lbl = tk.Label(files_header, font=ui_font(8), bg=Colors.BG_BASE, fg=Colors.TEXT_DIM, cursor="hand2")
+        self.select_none_lbl.pack(side="right", padx=(0, 12))
+        self.select_none_lbl.bind("<Button-1>", lambda e: self._set_all_selected(False))
+        self.select_none_lbl.bind("<Enter>", lambda e: self.select_none_lbl.configure(fg=Colors.ACCENT_LIGHT))
+        self.select_none_lbl.bind("<Leave>", lambda e: self.select_none_lbl.configure(fg=Colors.TEXT_DIM))
+
+        self.select_all_lbl = tk.Label(files_header, font=ui_font(8), bg=Colors.BG_BASE, fg=Colors.TEXT_DIM, cursor="hand2")
+        self.select_all_lbl.pack(side="right", padx=(0, 6))
+        self.select_all_lbl.bind("<Button-1>", lambda e: self._set_all_selected(True))
+        self.select_all_lbl.bind("<Enter>", lambda e: self.select_all_lbl.configure(fg=Colors.ACCENT_LIGHT))
+        self.select_all_lbl.bind("<Leave>", lambda e: self.select_all_lbl.configure(fg=Colors.TEXT_DIM))
 
         list_card = tk.Frame(content, bg=Colors.BORDER, padx=1, pady=1)
 
@@ -548,7 +622,7 @@ class CBZMergerApp:
         self.scroll_list = ScrollableFrame(list_frame, bg=Colors.BG_CARD)
         self.scroll_list.pack(fill="both", expand=True)
 
-        self._empty_label = tk.Label(list_frame, font=("Segoe UI", 9), bg=Colors.BG_CARD, fg=Colors.TEXT_MUTED)
+        self._empty_label = tk.Label(list_frame, font=ui_font(9), bg=Colors.BG_CARD, fg=Colors.TEXT_MUTED)
         self._empty_label.place(relx=0.5, rely=0.5, anchor="center")
 
         # ── Section 3: Output Settings
@@ -569,17 +643,19 @@ class CBZMergerApp:
         cover_wrap = tk.Frame(out_inner, bg=Colors.BG_CARD)
         cover_wrap.pack(side="right", fill="y", padx=(15, 0))
         
-        self.cover_canvas = tk.Canvas(cover_wrap, width=100, height=140, bg=Colors.BG_INPUT, highlightthickness=1, highlightbackground=Colors.BORDER)
+        self.cover_canvas = tk.Canvas(cover_wrap, width=100, height=140, bg=Colors.BG_INPUT, highlightthickness=1, highlightbackground=Colors.BORDER, cursor="hand2")
         self.cover_canvas.pack(side="top")
-        self.cover_canvas.create_text(50, 70, text="Drop\nCover", fill=Colors.TEXT_MUTED, justify="center")
-        
-        self.cover_label = tk.Label(cover_wrap, text="No Cover", font=("Segoe UI", 7), bg=Colors.BG_CARD, fg=Colors.TEXT_DIM)
+        self.cover_canvas.create_text(50, 70, text="Click or\nDrop Cover", fill=Colors.TEXT_MUTED, justify="center")
+        self.cover_canvas.bind("<Button-1>", lambda e: self._browse_cover_image())
+        self.cover_canvas.bind("<Button-3>", lambda e: self._clear_cover_image())
+
+        self.cover_label = tk.Label(cover_wrap, text="No Cover", font=ui_font(7), bg=Colors.BG_CARD, fg=Colors.TEXT_DIM)
         self.cover_label.pack(side="top", pady=(2, 0))
 
         out_row = tk.Frame(settings_frame, bg=Colors.BG_CARD)
         out_row.pack(fill="x")
 
-        self.lbl_filename = tk.Label(out_row, font=("Segoe UI", 9), bg=Colors.BG_CARD, fg=Colors.TEXT_DIM)
+        self.lbl_filename = tk.Label(out_row, font=ui_font(9), bg=Colors.BG_CARD, fg=Colors.TEXT_DIM)
         self.lbl_filename.pack(side="left", padx=(0, 10))
 
         self.output_var = tk.StringVar(value="merged_manga.cbz")
@@ -592,7 +668,7 @@ class CBZMergerApp:
 
         self.save_location_var = tk.StringVar(value="")
         self.save_location_label = tk.Label(settings_frame, textvariable=self.save_location_var,
-                                            font=("Segoe UI", 8), bg=Colors.BG_CARD, fg=Colors.TEXT_DIM, anchor="w")
+                                            font=ui_font(8), bg=Colors.BG_CARD, fg=Colors.TEXT_DIM, anchor="w")
         self.save_location_label.pack(fill="x", pady=(6, 0))
         self._custom_output_path = None
 
@@ -601,7 +677,7 @@ class CBZMergerApp:
         compress_row.pack(fill="x", pady=(6, 0))
 
         self.compress_cb = tk.Checkbutton(
-            compress_row, variable=self.compress_var, font=("Segoe UI", 9),
+            compress_row, variable=self.compress_var, font=ui_font(9),
             bg=Colors.BG_CARD, fg=Colors.TEXT_DIM, selectcolor=Colors.BG_INPUT,
             activebackground=Colors.BG_CARD, activeforeground=Colors.TEXT,
             highlightthickness=0, borderwidth=0, cursor="hand2"
@@ -613,7 +689,7 @@ class CBZMergerApp:
         ereader_row.pack(fill="x", pady=(6, 0))
 
         self.ereader_cb = tk.Checkbutton(
-            ereader_row, variable=self.ereader_var, font=("Segoe UI", 9),
+            ereader_row, variable=self.ereader_var, font=ui_font(9),
             bg=Colors.BG_CARD, fg=Colors.TEXT_DIM, selectcolor=Colors.BG_INPUT,
             activebackground=Colors.BG_CARD, activeforeground=Colors.TEXT,
             highlightthickness=0, borderwidth=0, cursor="hand2"
@@ -627,7 +703,7 @@ class CBZMergerApp:
         split_row.pack(fill="x", pady=(6, 0))
         
         self.split_cb = tk.Checkbutton(
-            split_row, variable=self.split_var, font=("Segoe UI", 9),
+            split_row, variable=self.split_var, font=ui_font(9),
             bg=Colors.BG_CARD, fg=Colors.TEXT_DIM, selectcolor=Colors.BG_INPUT,
             activebackground=Colors.BG_CARD, activeforeground=Colors.TEXT,
             highlightthickness=0, borderwidth=0, cursor="hand2",
@@ -635,11 +711,11 @@ class CBZMergerApp:
         )
         self.split_cb.pack(side="left")
         
-        self.split_lbl = tk.Label(split_row, font=("Segoe UI", 8), bg=Colors.BG_CARD, fg=Colors.TEXT_MUTED)
+        self.split_lbl = tk.Label(split_row, font=ui_font(8), bg=Colors.BG_CARD, fg=Colors.TEXT_MUTED)
         self.split_lbl.pack(side="left", padx=(15, 5))
         
         self.split_entry = tk.Entry(
-            split_row, textvariable=self.split_count_var, width=5, font=("Segoe UI", 9),
+            split_row, textvariable=self.split_count_var, width=5, font=ui_font(9),
             bg=Colors.BG_INPUT, fg=Colors.TEXT_DIM, insertbackground=Colors.ACCENT_LIGHT,
             highlightthickness=0, borderwidth=0, state="disabled"
         )
@@ -662,9 +738,9 @@ class CBZMergerApp:
         else:
             frame.pack(anchor="w", pady=(0, 4))
 
-        tk.Label(frame, text=f"{icon}", font=("Segoe UI Emoji", 9),
+        tk.Label(frame, text=f"{icon}", font=emoji_font(9),
                  bg=frame.cget("bg"), fg=Colors.ACCENT_LIGHT).pack(side="left", padx=(0, 6))
-        lbl = tk.Label(frame, text=text, font=("Segoe UI", 8, "bold"), bg=frame.cget("bg"), fg=Colors.TEXT_DIM)
+        lbl = tk.Label(frame, text=text, font=ui_font(8, "bold"), bg=frame.cget("bg"), fg=Colors.TEXT_DIM)
         lbl.pack(side="left")
         return lbl
 
@@ -675,8 +751,14 @@ class CBZMergerApp:
         
         if not self.cbz_file_items:
             self.status_label.configure(text=self.t("ready_start"))
-            self.folder_var.set(self.t("no_files"))
-            self._empty_label.configure(text=self.t("empty_list"))
+            if self.input_folder:
+                # A folder is selected but it has no .cbz files — keep showing
+                # its path instead of overwriting it with the placeholder text.
+                self.folder_var.set(str(self.input_folder))
+                self._empty_label.configure(text=self.t("no_cbz"))
+            else:
+                self.folder_var.set(self.t("no_files"))
+                self._empty_label.configure(text=self.t("empty_list"))
 
         self.merge_btn.set_text(self.t("start_merge"))
         self.cancel_btn.set_text(self.t("cancel_merge"))
@@ -694,6 +776,8 @@ class CBZMergerApp:
         self.split_cb.configure(text=self.t("split_vols"))
         self.split_lbl.configure(text=self.t("ch_per_vol"))
         self.lang_btn.set_text(self.t("lang_btn"))
+        self.select_all_lbl.configure(text=self.t("select_all"))
+        self.select_none_lbl.configure(text=self.t("select_none"))
         
         if not self._custom_output_path and self.input_folder:
             self.save_location_var.set(self.t("save_to", self.input_folder))
@@ -706,7 +790,7 @@ class CBZMergerApp:
         from io import BytesIO
         try:
             with zipfile.ZipFile(cbz_path, 'r') as zf:
-                entries = [n for n in zf.namelist() if Path(n).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"} and not n.startswith("__MACOSX")]
+                entries = [n for n in zf.namelist() if Path(n).suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS and not n.startswith("__MACOSX")]
                 entries.sort(key=lambda n: _natural_sort_key(Path(n)))
                 if entries:
                     data = zf.read(entries[0])
@@ -743,8 +827,23 @@ class CBZMergerApp:
             self.cover_canvas.create_image(50, 70, image=self.cover_photo, anchor="center")
             self.cover_label.configure(text=self.t("custom_cover") if self.custom_cover_path else self.t("auto_cover"), fg=Colors.ACCENT_LIGHT if self.custom_cover_path else Colors.TEXT_DIM)
         else:
-            self.cover_canvas.create_text(50, 70, text="Drop\nCover", fill=Colors.TEXT_MUTED, justify="center")
+            self.cover_canvas.create_text(50, 70, text="Click or\nDrop Cover", fill=Colors.TEXT_MUTED, justify="center")
             self.cover_label.configure(text=self.t("no_cover"), fg=Colors.TEXT_DIM)
+
+    def _browse_cover_image(self):
+        if self.is_running: return
+        patterns = " ".join(f"*{ext}" for ext in sorted(SUPPORTED_IMAGE_EXTENSIONS))
+        path = filedialog.askopenfilename(
+            title=self.t("custom_cover"),
+            filetypes=[("Image Files", patterns), ("All Files", "*.*")]
+        )
+        if not path: return
+        self._update_cover_preview(custom_path=Path(path))
+
+    def _clear_cover_image(self):
+        if self.is_running: return
+        self.custom_cover_path = None
+        self._update_cover_preview()
 
     def _on_drop(self, event):
         if self.is_running: return
@@ -755,7 +854,7 @@ class CBZMergerApp:
         first_path = Path(dropped[0])
         
         # Cover detection
-        if first_path.is_file() and first_path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
+        if first_path.is_file() and first_path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
             self._update_cover_preview(custom_path=first_path)
             return
 
@@ -793,8 +892,18 @@ class CBZMergerApp:
         self.save_location_var.set(self.t("save_to", self._custom_output_path.parent))
 
     def _open_output_folder(self):
-        if self._last_output_path and self._last_output_path.exists():
-            os.startfile(self._last_output_path.parent)
+        if not (self._last_output_path and self._last_output_path.exists()):
+            return
+        folder = self._last_output_path.parent
+        try:
+            if sys.platform == "win32":
+                os.startfile(folder)
+            elif sys.platform == "darwin":
+                subprocess.run(["open", str(folder)], check=False)
+            else:
+                subprocess.run(["xdg-open", str(folder)], check=False)
+        except Exception as e:
+            messagebox.showerror(self.t("alert_title"), str(e))
 
     def _set_status_dot(self, color):
         self._status_dot_color = color
@@ -855,13 +964,13 @@ class CBZMergerApp:
         cb.pack(side="left", padx=(5, 5))
         
         size_str = _format_size(f.stat().st_size)
-        lbl = tk.Label(frame, text=f"{f.name} ({size_str})", fg=Colors.TEXT_SEC, bg=Colors.BG_CARD, font=("Cascadia Code", 9), anchor="w")
+        lbl = tk.Label(frame, text=f"{f.name} ({size_str})", fg=Colors.TEXT_SEC, bg=Colors.BG_CARD, font=mono_font(9), anchor="w")
         lbl.pack(side="left", fill="x", expand=True)
 
         btn_down = tk.Button(
             frame, text="⬇️", bg=Colors.BG_CARD, fg=Colors.TEXT,
             activebackground=Colors.BG_HOVER, relief="flat", cursor="hand2",
-            command=lambda p=f: self._move_item(p, 1), font=("Segoe UI Emoji", 8),
+            command=lambda p=f: self._move_item(p, 1), font=emoji_font(8),
             borderwidth=0, highlightthickness=0, padx=4, pady=2
         )
         btn_down.pack(side="right", padx=(2, 5))
@@ -869,7 +978,7 @@ class CBZMergerApp:
         btn_up = tk.Button(
             frame, text="⬆️", bg=Colors.BG_CARD, fg=Colors.TEXT,
             activebackground=Colors.BG_HOVER, relief="flat", cursor="hand2",
-            command=lambda p=f: self._move_item(p, -1), font=("Segoe UI Emoji", 8),
+            command=lambda p=f: self._move_item(p, -1), font=emoji_font(8),
             borderwidth=0, highlightthickness=0, padx=4, pady=2
         )
         btn_up.pack(side="right", padx=(0, 2))
@@ -885,6 +994,12 @@ class CBZMergerApp:
         if 0 <= new_idx < len(self.cbz_file_items):
             self.cbz_file_items[idx], self.cbz_file_items[new_idx] = self.cbz_file_items[new_idx], self.cbz_file_items[idx]
             self._render_file_list()
+
+    def _set_all_selected(self, selected: bool):
+        if self.is_running or not self.cbz_file_items: return
+        for item in self.cbz_file_items:
+            item["var"].set(selected)
+        self._update_selection_counts()
 
     def _render_file_list(self):
         for item in self.cbz_file_items:
@@ -919,6 +1034,36 @@ class CBZMergerApp:
         self.progress_bar.set_progress(0)
         self._update_cover_preview()
 
+    def _confirm_overwrite(self, output_name: str, selected_files: list, split_enabled: bool, split_count: int) -> bool:
+        """Warn before silently overwriting existing output file(s). Returns False if the user cancels."""
+        base_dir = self._custom_output_path.parent if self._custom_output_path else self.input_folder
+        if base_dir is None:
+            return True
+
+        if split_enabled and split_count > 0:
+            num_volumes = len(range(0, len(selected_files), split_count))
+        else:
+            num_volumes = 1
+
+        if num_volumes > 1:
+            stem = output_name[:-4] if output_name.lower().endswith(".cbz") else output_name
+            prospective_paths = [base_dir / f"{stem}_Vol_{i}.cbz" for i in range(1, num_volumes + 1)]
+        else:
+            prospective_paths = [self._custom_output_path if self._custom_output_path else base_dir / output_name]
+
+        existing = [p for p in prospective_paths if p.exists()]
+        if not existing:
+            return True
+
+        names = "\n".join(p.name for p in existing[:10])
+        if len(existing) > 10:
+            names += f"\n… (+{len(existing) - 10})"
+
+        return messagebox.askyesno(
+            self.t("confirm_overwrite_title"),
+            self.t("confirm_overwrite", len(existing)) + f"\n\n{names}"
+        )
+
     def _start_merge(self):
         if self.is_running: return
 
@@ -936,20 +1081,24 @@ class CBZMergerApp:
             output_name += ".cbz"
             self.output_var.set(output_name)
 
+        split_enabled = self.split_var.get()
+        count_str = self.split_count_var.get().strip()
+        split_count = int(count_str) if count_str.isdigit() and int(count_str) > 0 else 15
+
+        if not self._confirm_overwrite(output_name, selected_files, split_enabled, split_count):
+            return
+
         self.is_running = True
         self.abort_event.clear()
-        
+
         self.cancel_btn.pack(side="left", padx=(10, 0))
         self.cancel_btn.set_enabled(True)
         self.merge_btn.set_enabled(False)
         self.browse_btn.set_enabled(False)
+        self.save_as_btn.set_enabled(False)
         self.progress_bar.set_progress(0)
         self._set_status_dot(Colors.ACCENT_LIGHT)
         self.status_label.configure(text=self.t("starting"), fg=Colors.ACCENT_LIGHT)
-
-        split_enabled = self.split_var.get()
-        count_str = self.split_count_var.get().strip()
-        split_count = int(count_str) if count_str.isdigit() and int(count_str) > 0 else 15
 
         thread = threading.Thread(
             target=self._run_merge,
@@ -964,6 +1113,7 @@ class CBZMergerApp:
         compression = zipfile.ZIP_DEFLATED if compress else zipfile.ZIP_STORED
         start_time = time.time()
         temp_dir = None
+        v_path = None
 
         chunks = []
         if split and split_count > 0:
@@ -974,7 +1124,9 @@ class CBZMergerApp:
         total_chapters = len(selected_files)
         chapters_processed = 0
         volumes_created = len(chunks)
+        actual_volumes_written = 0
         total_extracted_images = 0
+        cover_placed = False
 
         try:
             temp_dir = Path(tempfile.mkdtemp(prefix="cbz_merger_"))
@@ -1022,17 +1174,18 @@ class CBZMergerApp:
                             print(f"Error extracting {cbz_file.name}: {e}")
 
                 if self.abort_event.is_set(): break
-                if not all_images and not self.custom_cover_path: continue
+                if not all_images: continue
 
                 total_extracted_images += len(all_images)
                 all_images.sort(key=lambda p: p.name)
-                
-                # Check for custom cover
-                if self.custom_cover_path and self.custom_cover_path.exists():
+
+                # Custom cover only goes on the first volume that actually gets written
+                if not cover_placed and self.custom_cover_path and self.custom_cover_path.exists():
                     cover_target = temp_dir / f"00000_cover{self.custom_cover_path.suffix}"
                     try:
                         shutil.copy(self.custom_cover_path, cover_target)
                         all_images.insert(0, cover_target)
+                        cover_placed = True
                     except Exception as e:
                         print(f"Error copying custom cover: {e}")
 
@@ -1045,7 +1198,7 @@ class CBZMergerApp:
                         "xmlns:xsd": "http://www.w3.org/2001/XMLSchema", 
                         "xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance"
                     })
-                    title_text = output_name.replace(".cbz", "")
+                    title_text = output_name[:-4] if output_name.lower().endswith(".cbz") else output_name
                     if volumes_created > 1: title_text += f" Volume {vol_index + 1}"
                     ET.SubElement(root, "Title").text = title_text
                     ET.SubElement(root, "Summary").text = f"Merged {len(chunk)} files using CBZ Merger."
@@ -1074,6 +1227,9 @@ class CBZMergerApp:
                             img_prog = ((i + 1) / total_images) * (0.5 / volumes_created)
                             progress = base_prog + vol_prog + img_prog
                             self._update_progress(progress)
+
+                if not self.abort_event.is_set():
+                    actual_volumes_written += 1
 
                 # Clean up images in temp_dir before next chunk to save RAM / Disk Space
                 for img in all_images:
@@ -1105,7 +1261,7 @@ class CBZMergerApp:
             self._update_progress(1.0)
             
             if volumes_created > 1:
-                self._update_status(self.t("done_split", total_extracted_images, volumes_created, elapsed), Colors.SUCCESS)
+                self._update_status(self.t("done_split", total_extracted_images, actual_volumes_written, elapsed), Colors.SUCCESS)
                 self.root.after(0, lambda: self.save_location_var.set(self.t("saved_to", v_path.parent)))
             else:
                 size = _format_size(v_path.stat().st_size)
@@ -1117,11 +1273,18 @@ class CBZMergerApp:
             self.root.after(0, lambda: self._open_folder_frame.pack(fill="x", pady=(6, 0)))
 
         except PermissionError:
-            self._update_status(self.t("perm_err", output_path), Colors.ERROR)
+            self._update_status(self.t("perm_err", v_path), Colors.ERROR)
             self._update_dot(Colors.ERROR)
         except Exception as e:
             self._update_status(self.t("err", e), Colors.ERROR)
             self._update_dot(Colors.ERROR)
+            # The zip may already be truncated/partially written at this point —
+            # leaving it behind would masquerade as a valid (but corrupt) archive.
+            if v_path and v_path.exists():
+                try:
+                    v_path.unlink()
+                except Exception:
+                    pass
 
         finally:
             if temp_dir and temp_dir.exists():
@@ -1134,6 +1297,7 @@ class CBZMergerApp:
             self.root.after(0, lambda: self.cancel_btn.pack_forget())
             self.root.after(0, lambda: self.merge_btn.set_enabled(True))
             self.root.after(0, lambda: self.browse_btn.set_enabled(True))
+            self.root.after(0, lambda: self.save_as_btn.set_enabled(True))
 
     def _update_status(self, text: str, color: str = Colors.TEXT_DIM):
         self.root.after(0, lambda: self.status_label.configure(text=text, fg=color))

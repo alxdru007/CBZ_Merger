@@ -13,6 +13,8 @@ Can also be imported as a module:
     merge_cbz_files("./my_manga/", "combined.cbz")
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import zipfile
@@ -47,6 +49,12 @@ def _natural_sort_key(path: Path):
     return [int(p) if p.isdigit() else p.lower() for p in parts]
 
 
+def _sanitize_filename(name: str) -> str:
+    """Strip characters that are illegal in Windows filenames."""
+    import re
+    return re.sub(r'[<>:"/\\|?*]', "_", name).strip()
+
+
 def _format_size(size_bytes: int) -> str:
     """Format byte count to human-readable string."""
     for unit in ("B", "KB", "MB", "GB"):
@@ -75,7 +83,12 @@ def discover_cbz_files(input_folder: str | Path) -> list[Path]:
     if not folder.is_dir():
         raise FileNotFoundError(f"❌ Input folder not found: {folder}")
 
-    cbz_files = sorted(folder.glob("*.cbz"), key=_natural_sort_key)
+    # Iterate + filter by suffix (case-insensitively) instead of glob("*.cbz"),
+    # since glob is case-sensitive on Linux/macOS and would miss e.g. ".CBZ".
+    cbz_files = sorted(
+        (p for p in folder.iterdir() if p.is_file() and p.suffix.lower() == ".cbz"),
+        key=_natural_sort_key
+    )
 
     if not cbz_files:
         raise FileNotFoundError(f"❌ No .cbz files found in: {folder}")
@@ -111,7 +124,7 @@ def extract_cbz(cbz_path: Path, target_dir: Path, chapter_index: int, optimize_f
                 # Create unique, ordered filename:
                 # Format: CCCC_IIII_originalname.ext
                 # CCCC = chapter index, IIII = image index within chapter
-                chapter_tag = cbz_path.stem.replace(" ", "_")
+                chapter_tag = _sanitize_filename(cbz_path.stem.replace(" ", "_"))
                 new_name = f"{chapter_index:04d}_{img_index:04d}_{chapter_tag}{ext}"
                 out_path = target_dir / new_name
 
@@ -302,6 +315,13 @@ def merge_cbz_files(
         return None
     except Exception as e:
         print(f"❌ Unexpected error during merge: {e}")
+        # The zip may already be truncated/partially written at this point —
+        # leaving it behind would masquerade as a valid (but corrupt) archive.
+        if output_path.exists():
+            try:
+                output_path.unlink()
+            except Exception:
+                pass
         return None
 
     finally:
